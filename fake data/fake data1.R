@@ -1,0 +1,127 @@
+rm(list=ls())
+set.seed(1)
+
+setwd('U:\\GIT_models\\git_ssf\\fake data')
+source('aux functions.R')
+library('akima') #for linear interpolation
+library('mvtnorm')
+library('ggplot2')
+
+#basic settings
+ncov=3
+xdim=1000
+ydim=1000
+nloc=xdim*ydim
+
+#create spatially correlated covariates
+xmat=array(NA,dim=c(xdim,ydim,ncov))
+xcoord=matrix(1:xdim,ydim,xdim,byrow=T)
+ycoord=matrix(1:ydim,ydim,xdim)
+ncenters=10
+for (i in 1:ncov){
+  coord.center=data.frame(x=sample(1:xdim,size=ncenters),
+                          y=sample(1:ydim,size=ncenters))
+  dist2=matrix(Inf,ydim,xdim)
+  for (j in 1:ncenters){
+    x2=(xcoord-coord.center$x[j])^2
+    y2=(ycoord-coord.center$y[j])^2
+    dist1=sqrt(x2+y2)
+    cond=dist1<dist2
+    dist2[cond]=dist1[cond]
+  }
+  # image(dist2)
+  cov=(-1/(2*10))*dist2
+  #ensure it is positive
+  cov1=cov-min(cov) 
+  #ensure it is standardized
+  cov2=(cov1-mean(cov1))/sd(cov1)
+  # image(cov2)
+  xmat[,,i]=cov2
+}
+ind.loc=matrix(1:nloc,xdim,ydim)
+
+#parameters
+alpha=c(1,-1,0,0) #parameters for time model
+gamma.b=2 #this comes from time model
+betas.true=betas=c(-1,1,0) #parameters for resource selection function
+
+#calculate mean time and preference
+mean.time=mean.pref=matrix(NA,xdim,ydim)
+for (i in 1:xdim){
+  for (j in 1:ydim){
+    mean.time[i,j]=exp(c(1,xmat[i,j,])%*%alpha)
+    mean.pref[i,j]=exp(xmat[i,j,]%*%betas)
+  }
+}
+
+#simulate movement
+current.pos=ind.loc[500,500]
+time.int=4
+nsim=1000
+coord=matrix(NA,nsim,2)
+coord[1,]=c(500,500)
+colnames(coord)=c('x','y')
+window1=20
+
+for (i in 1:(nsim-1)){
+  print(i)
+  
+  #calculate cumulative time across 8 directions
+  res=get.cumtime.8dir(coord1=coord[i,],mean.time=mean.time,window1=window1)
+
+  #calculate prob of staying in the sample place
+  tmp=matrix(coord[i,c('y','x')],1,2)
+  tempo.not.move=mean.time[tmp]
+  res1=rbind(res,c(tempo.not.move,coord[i,c('x','y')]))
+
+  #interpolate cumulative time across a window1 x window1 area
+  minx=coord[i,'x']-window1; maxx=coord[i,'x']+window1
+  miny=coord[i,'y']-window1; maxy=coord[i,'y']+window1
+  res2 = interp(x=res1[,'x'],y=res1[,'y'],z=res1[,'cum.time'],
+                 xo = minx:maxx, yo = miny:maxy, 
+                 linear=T, extrap = F)
+  # image(res2)
+  res3=interp2xyz(res2)
+  colnames(res3)[3]='cum.time'
+
+  #get preference
+  tmp=cbind(res3[,'y'],res3[,'x'])
+  pref=mean.pref[tmp]
+  res4=cbind(res3,pref)
+
+  #calculate probabilities
+  # tempo.rel=res4[,'cum.time']/max(res4[,'cum.time'])
+  # plot(res4[,'x'],res4[,'y'],col=grey(tempo.rel))
+  
+  prob=dgamma(time.int,gamma.b*res4[,'cum.time'],gamma.b)*res4[,'pref']
+  soma=sum(prob)
+  prob=prob/soma
+  #plot(prob,type='h')
+  # prob1=prob-min(prob)
+  # prob1=prob1/max(prob1)
+  #plot(res4[,'x'],res4[,'y'],col=grey(1-prob1))
+  
+  #decide where to move
+  tmp=rmultinom(1,size=1,prob=prob)
+  ind=which(tmp==1)
+  res5=res4[ind,]
+  
+  coord[i+1,c('x','y')]=res5[c('x','y')]
+}
+
+#show trajectory
+plot(coord[,'x'],coord[,'y'],type='l')
+
+#assume we have some different time intervals
+n=nrow(coord)
+time.int=runif(n,min=6,max=8)
+
+#insert some bad values
+ind=sample(n,size=20)
+time.int[ind]=40
+
+#save results
+setwd('U:\\GIT_models\\git_ssf\\fake data')
+write.csv(cbind(coord,time.int),'fake data coord.csv',row.names=F)
+xmat1=matrix(xmat,1,xdim*ydim*ncov)
+write.csv(xmat1,'fake data xmat.csv',row.names=F)
